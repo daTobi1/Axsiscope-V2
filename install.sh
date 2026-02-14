@@ -20,82 +20,55 @@ KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
 AXISCOPE_EXTRAS_SRC="${INSTALL_DIR}/klippy/extras/axiscope.py"
 AXISCOPE_EXTRAS_DST="${KLIPPER_EXTRAS}/axiscope.py"
 
-usage() {
-  cat <<EOF
-Usage: install.sh [--branch <name>]
-
-Options:
-  --branch <name>   Git branch to install (default: main)
-EOF
-}
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --branch) BRANCH="${2:-}"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "Unknown parameter: $1"; usage; exit 1 ;;
-  esac
-done
-
 if [[ "${EUID}" -eq 0 ]]; then
-  echo "Please do not run as root/sudo. The script will ask for sudo when needed."
+  echo "Do NOT run as root. Script will request sudo when needed."
   exit 1
 fi
 
 echo "Installing Axiscope-V2..."
-echo "  REPO  : ${REPO_URL}"
-echo "  BRANCH: ${BRANCH}"
-echo "  DIR   : ${INSTALL_DIR}"
+echo "Repository : ${REPO_URL}"
+echo "Branch     : ${BRANCH}"
+echo "Install dir: ${INSTALL_DIR}"
 
-cd "${HOME}"
-
-# Backup existing installation
+# Clean old installation if present
 if [[ -d "${INSTALL_DIR}" ]]; then
-  echo "Existing installation found at ${INSTALL_DIR}"
-  echo "Backing up to ${INSTALL_DIR}.bak"
-  rm -rf "${INSTALL_DIR}.bak" || true
-  mv "${INSTALL_DIR}" "${INSTALL_DIR}.bak"
+  echo "Removing existing installation..."
+  rm -rf "${INSTALL_DIR}"
 fi
 
-# Clone repository
 echo "Cloning repository..."
 git clone -b "${BRANCH}" "${REPO_URL}" "${INSTALL_DIR}"
 
-# Ensure python3-venv
-echo "Checking for python3-venv..."
-if ! dpkg -l | grep -q "python3-venv"; then
-  echo "python3-venv not found. Installing..."
+cd "${INSTALL_DIR}"
+
+echo "Ensuring python3-venv is installed..."
+if ! dpkg -l | grep -q python3-venv; then
   sudo apt-get update
   sudo apt-get install -y python3-venv
-else
-  echo "python3-venv is already installed."
 fi
 
-# Create venv
-echo "Creating virtual environment..."
-python3 -m venv "${INSTALL_DIR}/${AXISCOPE_ENV}"
+echo "Creating virtual environment (robust mode)..."
+python3 -m venv --copies "${AXISCOPE_ENV}"
 
-if [[ ! -f "${INSTALL_DIR}/${AXISCOPE_ENV}/bin/activate" ]]; then
-  echo "ERROR: venv activation file missing."
+if [[ ! -f "${AXISCOPE_ENV}/bin/activate" ]]; then
+  echo "ERROR: Failed to create virtual environment."
   exit 1
 fi
 
-# Activate venv
 # shellcheck disable=SC1090
-source "${INSTALL_DIR}/${AXISCOPE_ENV}/bin/activate"
+source "${AXISCOPE_ENV}/bin/activate"
 
-# Install deps
 echo "Installing Python dependencies..."
-pip install --upgrade pip
-pip install flask waitress
+python -m pip install --upgrade pip
+python -m pip install flask waitress
 
-# Create systemd service
-echo "Creating systemd service file..."
+deactivate
+
+echo "Creating systemd service..."
 cat > "${SERVICE_FILE}" <<EOL
 [Unit]
 Description=Axiscope - Tool Alignment Interface for Klipper
 After=network.target moonraker.service
-StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -105,26 +78,22 @@ ExecStart=${INSTALL_DIR}/${AXISCOPE_ENV}/bin/python3 -m flask run --host=0.0.0.0
 Environment="PATH=${INSTALL_DIR}/${AXISCOPE_ENV}/bin"
 Environment="FLASK_APP=app.py"
 Restart=always
-RestartSec=1
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
 EOL
 
-echo "Installing service into /etc/systemd/system/..."
 sudo cp "${SERVICE_FILE}" "/etc/systemd/system/${SERVICE_NAME}"
 sudo systemctl daemon-reload
+sudo systemctl enable "${SERVICE_NAME}"
 
-# Allow service in Moonraker
-echo "Adding axiscope to moonraker.asvc..."
+echo "Registering service in moonraker.asvc..."
 mkdir -p "$(dirname "${MOONRAKER_ASVC}")"
 touch "${MOONRAKER_ASVC}"
-if ! grep -q "^axiscope$" "${MOONRAKER_ASVC}"; then
-  echo "axiscope" >> "${MOONRAKER_ASVC}"
-fi
+grep -qxF "axiscope" "${MOONRAKER_ASVC}" || echo "axiscope" >> "${MOONRAKER_ASVC}"
 
-# Add update_manager entry
-echo "Adding update_manager config to moonraker.conf..."
+echo "Adding update_manager block..."
 if [[ -f "${MOONRAKER_CONF}" ]]; then
   if ! grep -q "^\[update_manager axiscope\]" "${MOONRAKER_CONF}"; then
     cat >> "${MOONRAKER_CONF}" <<EOL
@@ -137,37 +106,23 @@ primary_branch: ${BRANCH}
 is_system_service: True
 managed_services: axiscope
 EOL
-  else
-    echo "update_manager axiscope already exists in moonraker.conf (leaving as is)."
   fi
-else
-  echo "WARNING: moonraker.conf not found at ${MOONRAKER_CONF} (skipping update_manager)."
 fi
 
-# Enable service (start optional)
-echo "Enabling axiscope service..."
-sudo systemctl enable "${SERVICE_NAME}"
-# sudo systemctl start "${SERVICE_NAME}"
+echo "Linking axiscope.py into Klipper..."
+if [[ -d "${KLIPPER_EXTRAS}" && -f "${AXISCOPE_EXTRAS_SRC}" ]]; then
+  sudo ln -sf "${AXISCOPE_EXTRAS_SRC}" "${AXISCOPE_EXTRAS_DST}"
+fi
 
-echo "Restarting moonraker..."
+echo "Restarting services..."
 sudo systemctl restart moonraker
+sudo systemctl restart klipper
 
-# Link axiscope.py into Klipper extras
-echo "Linking axiscope.py into Klipper extras..."
-if [[ ! -d "${KLIPPER_EXTRAS}" ]]; then
-  echo "WARNING: Klipper extras dir not found at ${KLIPPER_EXTRAS}. Skipping symlink."
-else
-  if [[ ! -f "${AXISCOPE_EXTRAS_SRC}" ]]; then
-    echo "WARNING: axiscope.py not found at ${AXISCOPE_EXTRAS_SRC}. Skipping symlink."
-  else
-    sudo ln -sf "${AXISCOPE_EXTRAS_SRC}" "${AXISCOPE_EXTRAS_DST}"
-    echo "Restarting klipper..."
-    sudo systemctl restart klipper
-  fi
-fi
+PRINTER_IP=$(hostname -I | awk '{print $1}')
 
-PRINTER_IP="$(hostname -I | awk '{print $1}')"
 echo ""
-echo "✅ Installation complete!"
-echo "Open: http://${PRINTER_IP}:3000"
-echo "Service: ${SERVICE_NAME} (controlled via Mainsail/Fluidd host services)"
+echo "✅ Axiscope installed successfully!"
+echo "Open in browser:"
+echo "http://${PRINTER_IP}:3000"
+echo ""
+echo "Service name: ${SERVICE_NAME}"
