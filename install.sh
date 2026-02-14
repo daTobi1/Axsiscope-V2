@@ -1,120 +1,108 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Default values
+# ==========================
+# Axiscope-V2 Installer
+# ==========================
+
 AXISCOPE_ENV="axiscope-env"
-INSTALL_DIR="$HOME/axiscope"
-REPO_URL="https://github.com/nic335/Axiscope.git"
+INSTALL_DIR="${HOME}/axiscope"
+REPO_URL="https://github.com/daTobi1/Axsiscope-V2.git"
 BRANCH="main"
 
-# Parse command line arguments
+SERVICE_NAME="axiscope.service"
+SERVICE_FILE="${INSTALL_DIR}/axiscope.service"
+
+MOONRAKER_CONF="${HOME}/printer_data/config/moonraker.conf"
+MOONRAKER_ASVC="${HOME}/printer_data/moonraker.asvc"
+
+KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
+AXISCOPE_EXTRAS_SRC="${INSTALL_DIR}/klippy/extras/axiscope.py"
+AXISCOPE_EXTRAS_DST="${KLIPPER_EXTRAS}/axiscope.py"
+
+usage() {
+  cat <<EOF
+Usage: install.sh [--branch <name>]
+
+Options:
+  --branch <name>   Git branch to install (default: main)
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
-    case $1 in
-        --branch)
-            BRANCH="$2"
-            shift 2
-            ;;
-        *)
-            echo "Unknown parameter: $1"
-            exit 1
-            ;;
-    esac
+  case "$1" in
+    --branch) BRANCH="${2:-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown parameter: $1"; usage; exit 1 ;;
+  esac
 done
 
-cd ~
-echo "Installing AxisScope..."
-echo "Using branch: ${BRANCH}"
+if [[ "${EUID}" -eq 0 ]]; then
+  echo "Please do not run as root/sudo. The script will ask for sudo when needed."
+  exit 1
+fi
 
-# Check for existing installation
-if [ -d "${INSTALL_DIR}" ]; then
-    echo "Existing installation found at ${INSTALL_DIR}"
-    echo "Backing up..."
-    mv "${INSTALL_DIR}" "${INSTALL_DIR}.bak"
+echo "Installing Axiscope-V2..."
+echo "  REPO  : ${REPO_URL}"
+echo "  BRANCH: ${BRANCH}"
+echo "  DIR   : ${INSTALL_DIR}"
+
+cd "${HOME}"
+
+# Backup existing installation
+if [[ -d "${INSTALL_DIR}" ]]; then
+  echo "Existing installation found at ${INSTALL_DIR}"
+  echo "Backing up to ${INSTALL_DIR}.bak"
+  rm -rf "${INSTALL_DIR}.bak" || true
+  mv "${INSTALL_DIR}" "${INSTALL_DIR}.bak"
 fi
 
 # Clone repository
-echo "Cloning AxisScope repository..."
-git clone -b ${BRANCH} ${REPO_URL} ${INSTALL_DIR}
+echo "Cloning repository..."
+git clone -b "${BRANCH}" "${REPO_URL}" "${INSTALL_DIR}"
 
-# Check if running as root
-if [ "$EUID" -eq 0 ]; then 
-    echo "Please do not run as root/sudo. Installation will prompt for sudo when needed."
-    exit 1
-fi
-
-# Check for python3-venv
+# Ensure python3-venv
 echo "Checking for python3-venv..."
-if ! dpkg -l | grep -q python3-venv; then
-    echo "python3-venv not found. Installing..."
-    sudo apt-get update || {
-        echo "Failed to update package list"
-        exit 1
-    }
-    sudo apt-get install -y python3-venv || {
-        echo "Failed to install python3-venv"
-        exit 1
-    }
-    echo "python3-venv installed successfully"
+if ! dpkg -l | grep -q "python3-venv"; then
+  echo "python3-venv not found. Installing..."
+  sudo apt-get update
+  sudo apt-get install -y python3-venv
 else
-    echo "python3-venv is already installed"
+  echo "python3-venv is already installed."
 fi
 
-# Verify python3 -m venv works
-echo "Verifying python3 venv functionality..."
-python3 -m venv --help > /dev/null 2>&1 || {
-    echo "Error: python3 venv module not working properly"
-    echo "Trying to fix by reinstalling..."
-    sudo apt-get install --reinstall python3-venv || {
-        echo "Failed to reinstall python3-venv"
-        exit 1
-    }
-}
+# Create venv
+echo "Creating virtual environment..."
+python3 -m venv "${INSTALL_DIR}/${AXISCOPE_ENV}"
 
-# Create and activate virtual environment
-echo "Setting up Python virtual environment..."
-python3 -m venv "${INSTALL_DIR}/${AXISCOPE_ENV}" || {
-    echo "Failed to create virtual environment"
-    echo "Python version: $(python3 --version)"
-    echo "Venv version: $(dpkg -l | grep python3-venv)"
-    exit 1
-}
-
-if [ ! -f "${INSTALL_DIR}/${AXISCOPE_ENV}/bin/activate" ]; then
-    echo "Virtual environment files not created properly"
-    exit 1
+if [[ ! -f "${INSTALL_DIR}/${AXISCOPE_ENV}/bin/activate" ]]; then
+  echo "ERROR: venv activation file missing."
+  exit 1
 fi
 
-echo "Activating virtual environment..."
-source "${INSTALL_DIR}/${AXISCOPE_ENV}/bin/activate" || {
-    echo "Failed to activate virtual environment"
-    exit 1
-}
+# Activate venv
+# shellcheck disable=SC1090
+source "${INSTALL_DIR}/${AXISCOPE_ENV}/bin/activate"
 
-# Verify activation
-if [[ "$VIRTUAL_ENV" != "${INSTALL_DIR}/${AXISCOPE_ENV}" ]]; then
-    echo "Virtual environment not activated correctly"
-    exit 1
-fi
-
-# Install Python dependencies
+# Install deps
 echo "Installing Python dependencies..."
 pip install --upgrade pip
-pip install flask waitress  # Install Flask and Waitress WSGI server
+pip install flask waitress
 
-# Create the service file
-echo "Creating service file..."
-SERVICE_FILE="${INSTALL_DIR}/axiscope.service"
-cat > "${SERVICE_FILE}" << EOL
+# Create systemd service
+echo "Creating systemd service file..."
+cat > "${SERVICE_FILE}" <<EOL
 [Unit]
-Description=AxisScope - Tool Alignment Interface for Klipper
+Description=Axiscope - Tool Alignment Interface for Klipper
 After=network.target moonraker.service
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=${USER}
-WorkingDirectory=${HOME}/axiscope
-ExecStart=${HOME}/axiscope/axiscope-env/bin/python3 -m flask run --host=0.0.0.0 --port=3000
-Environment="PATH=${HOME}/axiscope/axiscope-env/bin"
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${INSTALL_DIR}/${AXISCOPE_ENV}/bin/python3 -m flask run --host=0.0.0.0 --port=3000
+Environment="PATH=${INSTALL_DIR}/${AXISCOPE_ENV}/bin"
 Environment="FLASK_APP=app.py"
 Restart=always
 RestartSec=1
@@ -123,44 +111,23 @@ RestartSec=1
 WantedBy=multi-user.target
 EOL
 
-# Verify service file was created correctly
-if [ ! -f "${SERVICE_FILE}" ]; then
-    echo "Failed to create service file"
-    exit 1
-fi
-
-# Install service file
-echo "Installing service file..."
-sudo cp "${SERVICE_FILE}" /etc/systemd/system/
+echo "Installing service into /etc/systemd/system/..."
+sudo cp "${SERVICE_FILE}" "/etc/systemd/system/${SERVICE_NAME}"
 sudo systemctl daemon-reload
 
-# Add to moonraker allowed services
-echo "Adding to moonraker.asvc..."
-ASVC_FILE="${HOME}/printer_data/moonraker.asvc"
-
-# Create file if it doesn't exist
-if [ ! -f "${ASVC_FILE}" ]; then
-    touch "${ASVC_FILE}"
+# Allow service in Moonraker
+echo "Adding axiscope to moonraker.asvc..."
+mkdir -p "$(dirname "${MOONRAKER_ASVC}")"
+touch "${MOONRAKER_ASVC}"
+if ! grep -q "^axiscope$" "${MOONRAKER_ASVC}"; then
+  echo "axiscope" >> "${MOONRAKER_ASVC}"
 fi
 
-# Check if axiscope is already in the file
-if ! grep -q "^axiscope$" "${ASVC_FILE}"; then
-    # Ensure there's a newline at the end of file
-    [ -s "${ASVC_FILE}" ] && echo >> "${ASVC_FILE}"
-    # Add axiscope
-    echo "axiscope" >> "${ASVC_FILE}"
-    echo "Added axiscope to moonraker.asvc"
-else
-    echo "axiscope already in moonraker.asvc"
-fi
-
-# Add update manager configuration
-echo "Adding update manager configuration..."
-if [ -f "${HOME}/printer_data/config/moonraker.conf" ]; then
-    # Check if the section already exists
-    if ! grep -q "\[update_manager axiscope\]" "${HOME}/printer_data/config/moonraker.conf"; then
-        cat >> "${HOME}/printer_data/config/moonraker.conf" << EOL
-
+# Add update_manager entry
+echo "Adding update_manager config to moonraker.conf..."
+if [[ -f "${MOONRAKER_CONF}" ]]; then
+  if ! grep -q "^\[update_manager axiscope\]" "${MOONRAKER_CONF}"; then
+    cat >> "${MOONRAKER_CONF}" <<EOL
 
 [update_manager axiscope]
 type: git_repo
@@ -170,36 +137,37 @@ primary_branch: ${BRANCH}
 is_system_service: True
 managed_services: axiscope
 EOL
-        echo "Added update manager configuration to moonraker.conf"
-    else
-        echo "Update manager configuration already exists"
-    fi
+  else
+    echo "update_manager axiscope already exists in moonraker.conf (leaving as is)."
+  fi
 else
-    echo "Warning: moonraker.conf not found in expected location"
+  echo "WARNING: moonraker.conf not found at ${MOONRAKER_CONF} (skipping update_manager)."
 fi
 
-# Reload systemd and enable the service
-echo "Reloading systemd..."
-sudo systemctl daemon-reload
+# Enable service (start optional)
+echo "Enabling axiscope service..."
+sudo systemctl enable "${SERVICE_NAME}"
+# sudo systemctl start "${SERVICE_NAME}"
 
-# Enable and start the service
-echo "Enabling and starting AxisScope service..."
-sudo systemctl enable axiscope.service
-# sudo systemctl start axiscope.service
-
-# Restart moonraker to recognize the new service
-echo "Restarting moonraker to recognize the new service..."
+echo "Restarting moonraker..."
 sudo systemctl restart moonraker
 
-# Add symlink of axiscope into klipper/klippy/extras and restart klipper
-echo "Adding symlink of axiscope into klipper/klippy/extras... and restarting klipper"
-sudo ln -s ${HOME}/axiscope/klippy/extras/axiscope.py ${HOME}/klipper/klippy/extras/axiscope.py
-sudo systemctl restart klipper
+# Link axiscope.py into Klipper extras
+echo "Linking axiscope.py into Klipper extras..."
+if [[ ! -d "${KLIPPER_EXTRAS}" ]]; then
+  echo "WARNING: Klipper extras dir not found at ${KLIPPER_EXTRAS}. Skipping symlink."
+else
+  if [[ ! -f "${AXISCOPE_EXTRAS_SRC}" ]]; then
+    echo "WARNING: axiscope.py not found at ${AXISCOPE_EXTRAS_SRC}. Skipping symlink."
+  else
+    sudo ln -sf "${AXISCOPE_EXTRAS_SRC}" "${AXISCOPE_EXTRAS_DST}"
+    echo "Restarting klipper..."
+    sudo systemctl restart klipper
+  fi
+fi
 
-echo "Installation complete!"
-echo "AxisScope service has been enabled"
-echo "The service can be controlled through Mainsail's service control popup"
-
-# Get and display the printer's IP address
-PRINTER_IP=$(hostname -I | awk '{print $1}')
-echo "When running, it will be hosted at http://${PRINTER_IP}:3000"
+PRINTER_IP="$(hostname -I | awk '{print $1}')"
+echo ""
+echo "✅ Installation complete!"
+echo "Open: http://${PRINTER_IP}:3000"
+echo "Service: ${SERVICE_NAME} (controlled via Mainsail/Fluidd host services)"
