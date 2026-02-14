@@ -65,7 +65,22 @@ See `/docs` folder for:
 ---
 ## 📦 Installation
 
+Quick installation using curl:
+
+```bash
 curl -sSL https://raw.githubusercontent.com/daTobi1/Axsiscope-V2/main/install.sh | bash
+```
+
+The install script will:
+
+- Create Python virtual environment
+- Install required dependencies
+- Set up the systemd service
+- Configure Moonraker integration
+
+
+
+
 
 
 Generated: 2026-02-14 19:40
