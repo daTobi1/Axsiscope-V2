@@ -78,9 +78,23 @@ The install script will:
 - Set up the systemd service
 - Configure Moonraker integration
 
+🗑️ Uninstallation
 
+Quick uninstall using curl:
 
+```bash
+curl -sSL https://raw.githubusercontent.com/daTobi1/Axsiscope-V2/main/uninstall.sh | bash
+```
 
+The uninstall script will:
+
+- Stop and disable the Axiscope systemd service
+- Remove the service file
+- Remove the Axiscope installation directory
+- Remove Moonraker service registration (moonraker.asvc)
+- Remove the [update_manager axiscope] section from moonraker.conf
+- Remove the Klipper extras symlink
+- Restart Moonraker and Klipper
 
 
 Generated: 2026-02-14 19:40
