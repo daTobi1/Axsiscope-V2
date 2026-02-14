@@ -63,5 +63,9 @@ See `/docs` folder for:
 - Release Notes
 
 ---
+## 📦 Installation
+
+curl -sSL https://raw.githubusercontent.com/daTobi1/Axsiscope-V2/main/install.sh | bash
+
 
 Generated: 2026-02-14 19:40
