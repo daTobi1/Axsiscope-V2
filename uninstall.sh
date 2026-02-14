@@ -1,71 +1,74 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-# ==========================
-# Axiscope-V2 Uninstaller
-# ==========================
-
-INSTALL_DIR="${HOME}/axiscope"
+# Default values
+AXISCOPE_ENV="axiscope-env"
+INSTALL_DIR="$HOME/axiscope"
 SERVICE_NAME="axiscope.service"
+MOONRAKER_CONF="$HOME/printer_data/config/moonraker.conf"
+MOONRAKER_ASVC="$HOME/printer_data/moonraker.asvc"
+KLIPPER_EXTRAS="$HOME/klipper/klippy/extras/axiscope.py"
 
-MOONRAKER_CONF="${HOME}/printer_data/config/moonraker.conf"
-MOONRAKER_ASVC="${HOME}/printer_data/moonraker.asvc"
+echo "Uninstalling AxisScope..."
 
-KLIPPER_EXTRAS="${HOME}/klipper/klippy/extras"
-AXISCOPE_EXTRAS_DST="${KLIPPER_EXTRAS}/axiscope.py"
-
-echo "Uninstalling Axiscope..."
-
-# Stop/disable service
-echo "Stopping and disabling service..."
-sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-sudo systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+# Stop and disable the service
+echo "Stopping and disabling AxisScope service..."
+sudo systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+sudo systemctl disable ${SERVICE_NAME} 2>/dev/null || true
 
 # Remove service file
-echo "Removing systemd service..."
-sudo rm -f "/etc/systemd/system/${SERVICE_NAME}"
+echo "Removing service file..."
+sudo rm -f /etc/systemd/system/${SERVICE_NAME}
 sudo systemctl daemon-reload
 
-# Remove from moonraker.asvc
-if [[ -f "${MOONRAKER_ASVC}" ]]; then
-  echo "Removing axiscope from moonraker.asvc..."
-  sed -i '/^axiscope$/d' "${MOONRAKER_ASVC}"
-fi
-
-# Remove update_manager block (from [update_manager axiscope] until next [section] or EOF)
-if [[ -f "${MOONRAKER_CONF}" ]]; then
-  echo "Removing [update_manager axiscope] block from moonraker.conf..."
-  awk '
-    BEGIN{skip=0}
-    /^\[update_manager axiscope\]/{skip=1; next}
-    /^\[.*\]/{if(skip==1){skip=0}}
-    skip==0{print}
-  ' "${MOONRAKER_CONF}" > "${MOONRAKER_CONF}.tmp"
-  mv "${MOONRAKER_CONF}.tmp" "${MOONRAKER_CONF}"
-fi
-
-# Remove Klipper extras symlink/file (only if it is a symlink)
-echo "Removing Klipper extras link..."
-if [[ -L "${AXISCOPE_EXTRAS_DST}" ]]; then
-  sudo rm -f "${AXISCOPE_EXTRAS_DST}"
+# Deactivate virtual environment if active
+if [ -n "$VIRTUAL_ENV" ]; then
+    echo "Deactivating virtual environment..."
+    deactivate
 fi
 
 # Remove installation directory
-if [[ -d "${INSTALL_DIR}" ]]; then
-  echo "Removing install directory: ${INSTALL_DIR}"
-  rm -rf "${INSTALL_DIR}"
+if [ -d "${INSTALL_DIR}" ]; then
+    echo "Removing installation directory..."
+    rm -rf "${INSTALL_DIR}"
 fi
 
-# Optional: remove backup
-if [[ -d "${INSTALL_DIR}.bak" ]]; then
-  read -r -p "Backup directory found at ${INSTALL_DIR}.bak. Remove it? (y/N) " reply
-  if [[ "${reply}" =~ ^[Yy]$ ]]; then
-    rm -rf "${INSTALL_DIR}.bak"
-  fi
+# Check for backup and offer to remove it
+if [ -d "${INSTALL_DIR}.bak" ]; then
+    read -p "Backup directory found at ${INSTALL_DIR}.bak. Remove it? (y/N) " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "Removing backup directory..."
+        rm -rf "${INSTALL_DIR}.bak"
+    fi
 fi
 
-echo "Restarting moonraker + klipper..."
-sudo systemctl restart moonraker || true
-sudo systemctl restart klipper || true
+# Remove from moonraker.asvc
+if [ -f "${MOONRAKER_ASVC}" ]; then
+    echo "Removing from moonraker.asvc..."
+    sed -i '/^axiscope$/d' "${MOONRAKER_ASVC}"
+fi
 
-echo "✅ Axiscope uninstalled."
+# Remove update_manager block cleanly
+if [ -f "${MOONRAKER_CONF}" ]; then
+    echo "Removing update manager configuration..."
+    awk '
+        BEGIN{skip=0}
+        /^\[update_manager axiscope\]/{skip=1; next}
+        /^\[.*\]/{if(skip==1){skip=0}}
+        skip==0{print}
+    ' "${MOONRAKER_CONF}" > "${MOONRAKER_CONF}.tmp"
+    mv "${MOONRAKER_CONF}.tmp" "${MOONRAKER_CONF}"
+fi
+
+# Remove symlink from klipper extras
+echo "Removing symlink from klipper extras..."
+if [ -L "${KLIPPER_EXTRAS}" ]; then
+    sudo rm -f "${KLIPPER_EXTRAS}"
+fi
+
+# Restart services
+echo "Restarting services..."
+sudo systemctl restart moonraker 2>/dev/null || true
+sudo systemctl restart klipper 2>/dev/null || true
+
+echo "AxisScope (Axsiscope-V2) has been uninstalled successfully!"
