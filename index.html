@@ -25,7 +25,7 @@
 
     <script src="./js/camera.js"></script>
 
-    <!-- ✅ FIX: tools.js MUST be loaded BEFORE index.js -->
+    <!-- ? IMPORTANT: tools.js must load BEFORE index.js (updateTools is used in index.js) -->
     <script src="./js/tools.js"></script>
     <script src="./js/index.js"></script>
 
@@ -35,16 +35,12 @@
     <link rel="stylesheet" href="./css/camera.css">
 
     <style>
-        .modal-content {
-            border-radius: 10px;
-        }
+        .modal-content { border-radius: 10px; }
         .form-control:focus {
             border-color: #80bdff;
             box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
         }
-        #camera-select {
-            display: none;
-        }
+        #camera-select { display: none; }
         .camera-option {
             cursor: pointer;
             transition: background-color 0.2s;
@@ -52,9 +48,7 @@
             margin-bottom: 10px;
             border-radius: 5px;
         }
-        .camera-option:hover {
-            background-color: #f8f9fa;
-        }
+        .camera-option:hover { background-color: #f8f9fa; }
         .camera-option.selected {
             border-color: #0d6efd;
             background-color: #e7f1ff;
@@ -69,9 +63,7 @@
             max-height: 400px;
             overflow-y: auto;
         }
-        #camContainer {
-            display: none;
-        }
+        #camContainer { display: none; }
     </style>
   </head>
 
@@ -98,13 +90,11 @@
                         </div>
                     </div>
 
-                    <!-- Camera Selection (initially hidden) -->
+                    <!-- Camera Selection -->
                     <div id="camera-select" class="mb-3">
                         <label class="form-label">Select Camera</label>
                         <div class="camera-list-container">
-                            <div id="cameraList" class="list-group">
-                                <!-- Camera options will be inserted here -->
-                            </div>
+                            <div id="cameraList" class="list-group"></div>
                         </div>
                     </div>
                 </div>
@@ -117,14 +107,12 @@
 
     <div class="container text-center">
         <div class="row">
-            <!-- ----------- body.jinja------------------>
             <div class="col p-3">
                 <div class="border border-secondary-subtle rounded bg-body-tertiary p-2">
                     <div class="row p-2 pb-2">
                         <button name="ChangePrinter" id="ChangePrinter">Change Printer / Camera</button>
                     </div>
                     <div class="row p-2 pb-2">
-                        <!-- Flip Controls -->
                         <div class="row p-2">
                             <div class="col-6">
                                 <button type="button" class="btn btn-secondary w-100" id="flip-horizontal">
@@ -146,30 +134,17 @@
                         </svg>
                         </div>
                         <div class="row p-2">
-                        <div class="col-1">
-                            <i class="bi bi-zoom-out"></i>
+                        <div class="col-1"><i class="bi bi-zoom-out"></i></div>
+                        <div class="col-10"><input type="range" class="form-range" min="0" max="600" value="0" id="zoom-range"></div>
+                        <div class="col-1"><i class="bi bi-zoom-in"></i></div>
                         </div>
-                        <div class="col-10">
-                            <input type="range" class="form-range" min="0" max="600" value="0" id="zoom-range">
-                        </div>
-                        <div class="col-1">
-                            <i class="bi bi-zoom-in"></i>
-                        </div>
-                        </div>
-                    
                         <div class="row p-2">
-                        <div class="col-1">
-                            <i class="bi bi-brightness-low"></i>
-                        </div>
-                        <div class="col-10">
-                            <input type="range" class="form-range" min="0" max="400" id="contrast-range">
-                        </div>
-                        <div class="col-1">
-                            <i class="bi bi-brightness-high"></i>
-                        </div>
+                        <div class="col-1"><i class="bi bi-brightness-low"></i></div>
+                        <div class="col-10"><input type="range" class="form-range" min="0" max="400" id="contrast-range"></div>
+                        <div class="col-1"><i class="bi bi-brightness-high"></i></div>
                         </div>
                     </div>
-                        <!---------------------------- positioning --------------------->
+
                     <div id="positioning">
                         <div class="row justify-content-center">
                         <ul class="list-group list-group-horizontal-sm justify-content-center pb-2">
@@ -178,22 +153,23 @@
                             <li class="list-group-item"><span>Z: </span><span id="pos-z">0.0</span></li>
                         </ul>
                         </div>
-                    
+
                         <div class="row">
                         <div class="btn-toolbar justify-content-center" role="toolbar" aria-label="Homing Toolbar">
-                            <div class="btn-group btn-group-sm ps-5 pe-5 pb-1" role="group" aria-label="">
+                            <div class="btn-group btn-group-sm ps-5 pe-5 pb-1" role="group">
                             <button type="button" class="btn btn-danger border" id="home-all" data-homed="false" data-url="">HOME ALL</button>
                             <button type="button" class="btn btn-danger border" id="qgl" data-qgl="false" data-url="">QGL</button>
                             <button type="button" class="btn btn-danger border" id="disable-motors" data-motoron="false" data-url="">DISABLE</button>
                             </div>
                         </div>
                         </div>
+
                         <div id="BouncePositionBar"></div>
                         <div id="BigPositionBar"></div>
                     </div>
-                    <!-- -------------------------- positioning ------------------- -->
                 </div>
             </div>
+
             <div class="col p-3">
                 <div class="border border-secondary-subtle rounded bg-body-tertiary p-2 mb-3">
                 <div class="row p-2 pb-2">
@@ -207,7 +183,6 @@
                 </div>
 
                 <ul class="list-group" id="tool-list"></ul>
-
             </div>
         </div>
     </div>

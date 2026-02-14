@@ -1,35 +1,74 @@
 /* =========================================================
-   Axiscope tools.js (Global Master + Robust Z Calibrate)
-   - Works with your index.js:
-       index.js calls: getTools(), updateTools(), updateOffset(), toolChangeURL()
-   - Master capture row follows Reference tool selection
-   - Calibrate button enabled when axiscope object exists
-   - Probe update timer starts only after UI is rendered
+   Axiscope tools.js (Global Master + Config-default Z calc)
+   - Fixes: updateTools is defined (used by index.js)
+   - Z calc dropdown:
+       Default = Config (axiscope.cfg)
+       Label shows axiscope status z_calc_method (e.g. trimmed)
+       Only sends Z_CALC if user explicitly overrides
    ========================================================= */
 
-// --------------------------
-// Global state
-// --------------------------
 let axiscopeMasterTool = null;
 let _probeInterval = null;
+
+// Axiscope status cache
+let _axiscopePresent = false;
+let _axiscopeZCalcDefault = null; // "median" | "average" | "trimmed" | null
+
+// Remember UI dropdown selection across rerenders
+let _uiZCalcSelection = "config"; // "config" | "median" | "average" | "trimmed"
+
+// --------------------------
+// Helpers
+// --------------------------
+function printerUrl(ip, path) { return `http://${ip}${path}`; }
+
+function computeDefaultRef(toolNumbers) {
+  const sorted = [...toolNumbers].sort((a, b) => a - b);
+  if (axiscopeMasterTool !== null && sorted.includes(axiscopeMasterTool)) return axiscopeMasterTool;
+  if (sorted.includes(0)) return 0;
+  return sorted.length ? sorted[0] : 0;
+}
+
+function getSelectedReferenceTool(fallback = 0) {
+  const $checked = $(".calibrate-ref-checkbox:checked").first();
+  if ($checked.length) {
+    const v = parseInt($checked.val(), 10);
+    return Number.isNaN(v) ? fallback : v;
+  }
+  return axiscopeMasterTool ?? fallback;
+}
+
+function syncSelectAllState() {
+  const $all = $(".calibrate-tool-checkbox");
+  const $checked = $(".calibrate-tool-checkbox:checked");
+  $("#calibrate-select-all").prop("checked", $all.length > 0 && $all.length === $checked.length);
+}
+
+function applyMasterReferenceXY(axis) {
+  const master = getSelectedReferenceTool(0);
+  const $masterEl = $(`#T${master}-${axis}-new`);
+  const masterRaw = parseFloat($masterEl.attr("data-raw")) || 0.0;
+
+  $('button#toolchange').each(function(){
+    const tool = $(this).data("tool");
+    const $el = $(`#T${tool}-${axis}-new`);
+    if (!$el.length) return; // master row has no XY new fields
+    const raw = parseFloat($el.attr("data-raw")) || 0.0;
+    const rel = (parseInt(tool, 10) === parseInt(master, 10)) ? 0.0 : (raw - masterRaw);
+    $el.find('>:first-child').text(rel.toFixed(3));
+  });
+}
 
 // --------------------------
 // Templates
 // --------------------------
-
-// Master row: CAPTURE + Captured Position
 const masterToolItem = ({tool_number, disabled, tc_disabled}) => `
 <li class="list-group-item bg-body-tertiary p-2">
   <div class="container">
     <div class="row">
       <div class="col-2">
-        <button 
-          type="button"
-          class="btn btn-secondary btn-sm w-100 h-100 ${tc_disabled}"
-          id="toolchange"
-          name="T${tool_number}"
-          data-tool="${tool_number}"
-        >
+        <button type="button" class="btn btn-secondary btn-sm w-100 h-100 ${tc_disabled}"
+                id="toolchange" name="T${tool_number}" data-tool="${tool_number}">
           <h1>T${tool_number}</h1>
         </button>
       </div>
@@ -40,12 +79,10 @@ const masterToolItem = ({tool_number, disabled, tc_disabled}) => `
             <span class="fs-6">Master Capture</span>
             <small class="text-secondary" id="master-status-badge">Master: T${tool_number}</small>
           </div>
-          <button 
-            type="button" 
-            class="btn btn-sm btn-secondary fs-6 border text-center w-100 ${disabled}" 
-            style="padding-bottom:10px; padding-top:10px;" 
-            id="capture-pos"
-          >
+          <button type="button"
+                  class="btn btn-sm btn-secondary fs-6 border text-center w-100 ${disabled}"
+                  style="padding-bottom:10px; padding-top:10px;"
+                  id="capture-pos">
             CAPTURE <br/> CURRENT <br/> POSITION
           </button>
           <small class="text-secondary mt-2">
@@ -86,26 +123,19 @@ const masterToolItem = ({tool_number, disabled, tc_disabled}) => `
 </li>
 `;
 
-// Non-master row: XY input + offsets panel
 const nonMasterToolItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disabled}) => `
 <li class="list-group-item bg-body-tertiary p-2">
   <div class="container">
     <div class="row">
 
       <div class="col-2">
-        <button 
-          type="button"
-          class="btn btn-secondary btn-sm w-100 h-100 ${tc_disabled}"
-          id="toolchange"
-          name="T${tool_number}"
-          data-tool="${tool_number}"
-        >
+        <button type="button" class="btn btn-secondary btn-sm w-100 h-100 ${tc_disabled}"
+                id="toolchange" name="T${tool_number}" data-tool="${tool_number}">
           <h1>T${tool_number}</h1>
         </button>
       </div>
 
       <div class="col-6">
-
         <div class="row pb-3">
           <div class="input-group ps-1 pe-1">
             <button class="btn btn-secondary ${disabled}" type="button"
@@ -131,7 +161,6 @@ const nonMasterToolItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disa
                    ${disabled}>
           </div>
         </div>
-
       </div>
 
       <div class="col-4 border rounded bg-dark">
@@ -177,53 +206,21 @@ const nonMasterToolItem = ({tool_number, cx_offset, cy_offset, disabled, tc_disa
 `;
 
 // --------------------------
-// Helpers
+// Axiscope status fetch (for dropdown label + z fields)
 // --------------------------
-function printerUrl(ip, path) {
-  return `http://${ip}${path}`;
-}
-
-function computeDefaultRef(toolNumbers) {
-  const sorted = [...toolNumbers].sort((a, b) => a - b);
-  if (axiscopeMasterTool !== null && sorted.includes(axiscopeMasterTool)) return axiscopeMasterTool;
-  if (sorted.includes(0)) return 0;
-  return sorted.length ? sorted[0] : 0;
-}
-
-function getSelectedReferenceTool(fallback = 0) {
-  const $checked = $(".calibrate-ref-checkbox:checked").first();
-  if ($checked.length) {
-    const v = parseInt($checked.val(), 10);
-    return Number.isNaN(v) ? fallback : v;
-  }
-  if (axiscopeMasterTool !== null) return axiscopeMasterTool;
-  return fallback;
-}
-
-function syncSelectAllState() {
-  const $all = $(".calibrate-tool-checkbox");
-  const $checked = $(".calibrate-tool-checkbox:checked");
-  $("#calibrate-select-all").prop("checked", $all.length > 0 && $all.length === $checked.length);
-}
-
-// --------------------------
-// Master reference for XY display
-// --------------------------
-function applyMasterReferenceXY(axis) {
-  const master = getSelectedReferenceTool(0);
-  const $masterEl = $(`#T${master}-${axis}-new`);
-  const masterRaw = parseFloat($masterEl.attr("data-raw")) || 0.0;
-
-  $('button#toolchange').each(function(){
-    const tool = $(this).data("tool");
-    const $el = $(`#T${tool}-${axis}-new`);
-    if (!$el.length) return;
-
-    const raw = parseFloat($el.attr("data-raw")) || 0.0;
-    const rel = (parseInt(tool, 10) === parseInt(master, 10)) ? 0.0 : (raw - masterRaw);
-
-    $el.find('>:first-child').text(rel.toFixed(3));
-  });
+function fetchAxiscopeStatus() {
+  return $.get(printerUrl(printerIp, "/printer/objects/query?axiscope"))
+    .then(function(ax){
+      const st = ax?.result?.status?.axiscope;
+      _axiscopePresent = !!st;
+      _axiscopeZCalcDefault = (st?.z_calc_method || null);
+      return st || null;
+    })
+    .catch(function(){
+      _axiscopePresent = false;
+      _axiscopeZCalcDefault = null;
+      return null;
+    });
 }
 
 // --------------------------
@@ -238,7 +235,6 @@ function getProbeResults() {
 function updateProbeResults(tool, probeResults) {
   if (!probeResults || !probeResults[tool]) return;
   const r = probeResults[tool];
-
   if (typeof r.z_trigger === "number") $(`#T${tool}-z-trigger small`).text(r.z_trigger.toFixed(3));
   if (typeof r.z_offset === "number")  $(`#T${tool}-z-new small`).text(r.z_offset.toFixed(3));
 }
@@ -280,6 +276,15 @@ function calibrateButton(toolNumbers = [], enabled = false) {
   const btnClass = enabled ? "btn-primary" : "btn-secondary";
   const disabledAttr = enabled ? "" : "disabled";
 
+  const cfg = (_axiscopeZCalcDefault || "unknown").toLowerCase();
+  const cfgLabel = `Config (axiscope.cfg: ${cfg})`;
+
+  const sel = (_uiZCalcSelection || "config").toLowerCase();
+  const selConfig = sel === "config" ? "selected" : "";
+  const selMedian = sel === "median" ? "selected" : "";
+  const selAvg    = sel === "average" ? "selected" : "";
+  const selTrim   = sel === "trimmed" ? "selected" : "";
+
   return `
 <li class="list-group-item bg-body-tertiary p-2">
   <div class="container">
@@ -315,11 +320,13 @@ function calibrateButton(toolNumbers = [], enabled = false) {
         <div class="border border-secondary-subtle rounded p-2 bg-dark">
           <div class="d-flex justify-content-between align-items-center mb-1">
             <span class="fs-6">Z calculation</span>
+            <small class="text-secondary">Default = Config</small>
           </div>
           <select id="z-calc-method" class="form-select form-select-sm w-auto d-inline-block">
-            <option value="median" selected>Median</option>
-            <option value="average">Average</option>
-            <option value="trimmed">Trimmed mean</option>
+            <option value="config" ${selConfig}>${cfgLabel}</option>
+            <option value="median" ${selMedian}>Median</option>
+            <option value="average" ${selAvg}>Average</option>
+            <option value="trimmed" ${selTrim}>Trimmed mean</option>
           </select>
         </div>
       </div>
@@ -336,23 +343,36 @@ function calibrateButton(toolNumbers = [], enabled = false) {
 </li>`;
 }
 
+// Remember dropdown selection
+$(document).on("change", "#z-calc-method", function(){
+  _uiZCalcSelection = ($(this).val() || "config").toLowerCase();
+});
+
+// Calibrate click
 $(document).on("click", "#calibrate-all-btn", function() {
-  const selectedTools = $(".calibrate-tool-checkbox:checked").map(function(){ return parseInt(this.value, 10); }).get().filter(v => !Number.isNaN(v));
+  const selectedTools = $(".calibrate-tool-checkbox:checked")
+    .map(function(){ return parseInt(this.value, 10); })
+    .get()
+    .filter(v => !Number.isNaN(v));
+
   const refTool = getSelectedReferenceTool(0);
   if (!selectedTools.includes(refTool)) selectedTools.unshift(refTool);
 
-  const method = $("#z-calc-method").val() || "median";
-  const script = `CALIBRATE_ALL_Z_OFFSETS TOOLS=${selectedTools.join(",")} Z_CALC=${method} REF=${refTool}`;
+  const method = ($("#z-calc-method").val() || "config").toLowerCase();
+
+  // Only send override if not config
+  const zCalcPart = (method !== "config") ? ` Z_CALC=${method}` : "";
+  const script = `CALIBRATE_ALL_Z_OFFSETS TOOLS=${selectedTools.join(",")}${zCalcPart} REF=${refTool}`;
 
   $.get(printerUrl(printerIp, `/printer/gcode/script?script=${encodeURIComponent(script)}`))
     .done(() => console.log("Calibration started:", script))
     .fail(err => console.error("Calibration failed:", err));
 });
 
+// Select all
 $(document).on("change", "#calibrate-select-all", function () {
   const checked = $(this).is(":checked");
   $(".calibrate-tool-checkbox").prop("checked", checked);
-
   const refTool = getSelectedReferenceTool(0);
   $(`#calibrate-tool-${refTool}`).prop("checked", true);
   syncSelectAllState();
@@ -372,6 +392,8 @@ $(document).on("change", ".calibrate-ref-checkbox", function () {
   if (!Number.isNaN(refVal)) axiscopeMasterTool = refVal;
 
   $(`#calibrate-tool-${refVal}`).prop("checked", true);
+
+  // Rerender so Master row moves
   getTools();
 });
 
@@ -428,6 +450,7 @@ function getTools() {
 
       const master = computeDefaultRef(tool_numbers);
 
+      // Build query for tool objects
       let queryUrl = "/printer/objects/query?";
       tool_names.forEach(name => queryUrl += name + "&");
       queryUrl = queryUrl.slice(0,-1);
@@ -452,31 +475,28 @@ function getTools() {
             }
           });
 
-          // enable calibrate button if axiscope object exists
-          $.get(printerUrl(printerIp, "/printer/objects/query?axiscope"))
-            .then(function(ax){
-              const axiscopePresent = ax?.result?.status?.axiscope != null;
-              $("#tool-list").append(calibrateButton(tool_numbers, axiscopePresent));
+          // Fetch axiscope status for cfg method label + enable button
+          fetchAxiscopeStatus().then(function(){
+            $("#tool-list").append(calibrateButton(tool_numbers, _axiscopePresent));
 
-              $(".calibrate-ref-checkbox").prop("checked", false);
-              $(`#calibrate-ref-${master}`).prop("checked", true);
+            // Set reference checkbox to master
+            $(".calibrate-ref-checkbox").prop("checked", false);
+            $(`#calibrate-ref-${master}`).prop("checked", true);
 
-              $(`#calibrate-tool-${master}`).prop("checked", true);
-              syncSelectAllState();
+            // Ensure master included
+            $(`#calibrate-tool-${master}`).prop("checked", true);
+            syncSelectAllState();
 
-              $("#master-status-badge").text(`Master: T${master}`);
+            // Badge
+            $("#master-status-badge").text(`Master: T${master}`);
 
-              if (axiscopePresent) $('.z-fields').removeClass('d-none');
+            // Show z-fields if axiscope present
+            if (_axiscopePresent) $('.z-fields').removeClass('d-none');
 
-              startProbeResultsUpdatesOnce();
-              updateAllProbeResults();
-            })
-            .catch(function(){
-              $("#tool-list").append(calibrateButton(tool_numbers, false));
-            });
-
+            startProbeResultsUpdatesOnce();
+            updateAllProbeResults();
+          });
         });
-
     });
 }
 
@@ -496,7 +516,7 @@ function updateOffset(tool, axis) {
 
     let new_offset = (captured_pos - old_offset) - position;
 
-    // keep your sign flip behaviour
+    // Preserve your sign-flip behavior
     if (new_offset < 0) new_offset = Math.abs(new_offset);
     else new_offset = -new_offset;
 
@@ -517,7 +537,7 @@ function updateOffset(tool, axis) {
 function updateTools(tool_numbers, tool_number_active) {
   const master = getSelectedReferenceTool(0);
 
-  // CAPTURE only enabled when active tool == master
+  // Capture button enabled only if master tool is active
   const $captureBtn = $("#capture-pos");
   if ($captureBtn.length) {
     if (parseInt(tool_number_active, 10) !== parseInt(master, 10)) {
@@ -527,7 +547,7 @@ function updateTools(tool_numbers, tool_number_active) {
     }
   }
 
-  // Keep New X/Y recalculated
+  // Refresh XY display
   (tool_numbers || []).forEach((tool_no) => {
     updateOffset(tool_no, "x");
     updateOffset(tool_no, "y");
