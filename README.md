@@ -139,7 +139,7 @@ z_move_speed: 6
 # Sampling / Accuracy
 # -------------------------------------------------
 # Target number of samples per batch
-samples: 5
+samples: 5 #If us trimmed this count must be minimum 5
 
 # Maximum allowed deviation within a batch (mm)
 samples_tolerance: 0.005
@@ -151,7 +151,7 @@ samples_max_count: 20
 #   median   = robust against outliers (recommended)
 #   average  = mean value (smoother, but sensitive to outliers)
 #   trimmed  = trimmed mean (removes extreme values on both ends)
-z_calc_method: median
+z_calc_method: trimmed
 
 # For "trimmed" mode: number of values removed per side
 z_trim_count: 1
@@ -187,6 +187,7 @@ after_pickup_gcode:
 
 finish_gcode:
   M118 Calibration complete
+
 ```
 
 ### Finding the Endstop Position
